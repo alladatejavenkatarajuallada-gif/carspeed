@@ -83,15 +83,115 @@
         <hr style="margin: 30px 0; border: 1px solid #ddd;">
 
         <!-- Live Camera Option -->
-        <h4 class="mt-4">Live Camera</h4>
-        <p class="text-muted">Use your webcam for real-time speed detection using OpenCV.</p>
+        <h4 class="mt-4">Live Camera Capture</h4>
+        <p class="text-muted">Record a short clip from your webcam and upload it for speed detection.</p>
+        
+        <div id="camera-container" style="display:none; margin-top: 15px; border-radius: 8px; overflow: hidden; background: #000;">
+            <video id="webcamVideo" autoplay muted style="width: 100%; height: auto;"></video>
+        </div>
 
-        <form action="{% url 'live_camera' %}" method="get">
-            <button type="submit" class="btn btn-camera">Open Live Camera</button>
-        </form>
+        <div style="margin-top: 15px; display: flex; gap: 10px;">
+            <button type="button" id="startCameraBtn" class="btn btn-camera">Turn On Camera</button>
+            <button type="button" id="startRecordBtn" class="btn btn-danger" style="display:none; flex: 1;">Start Recording</button>
+            <button type="button" id="stopRecordBtn" class="btn btn-success" style="display:none; flex: 1;">Stop & Upload</button>
+        </div>
+        
+        <div id="loadingStatus" style="display:none; margin-top: 15px; text-align: center;">
+            <div class="spinner-border text-primary" role="status"></div>
+            <p class="mt-2 text-muted">Uploading and processing video... Please wait.</p>
+        </div>
+        
+        <!-- Hidden CSRF token -->
+        <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
     </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    let mediaRecorder;
+    let recordedChunks = [];
+    const webcamVideo = document.getElementById('webcamVideo');
+    const startCameraBtn = document.getElementById('startCameraBtn');
+    const startRecordBtn = document.getElementById('startRecordBtn');
+    const stopRecordBtn = document.getElementById('stopRecordBtn');
+    const cameraContainer = document.getElementById('camera-container');
+    const loadingStatus = document.getElementById('loadingStatus');
+
+    startCameraBtn.addEventListener('click', async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            webcamVideo.srcObject = stream;
+            cameraContainer.style.display = 'block';
+            startCameraBtn.style.display = 'none';
+            startRecordBtn.style.display = 'block';
+        } catch (err) {
+            alert('Error accessing camera: ' + err.message);
+        }
+    });
+
+    startRecordBtn.addEventListener('click', () => {
+        recordedChunks = [];
+        const stream = webcamVideo.srcObject;
+        
+        // Use mp4 if supported, else fallback to webm
+        const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
+        mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType });
+
+        mediaRecorder.ondataavailable = function(event) {
+            if (event.data.size > 0) {
+                recordedChunks.push(event.data);
+            }
+        };
+
+        mediaRecorder.onstop = function() {
+            const blob = new Blob(recordedChunks, { type: mimeType });
+            const filename = mimeType.includes('mp4') ? 'webcam_recording.mp4' : 'webcam_recording.webm';
+            uploadVideo(blob, filename);
+            
+            // Stop the camera
+            stream.getTracks().forEach(track => track.stop());
+            cameraContainer.style.display = 'none';
+        };
+
+        mediaRecorder.start();
+        startRecordBtn.style.display = 'none';
+        stopRecordBtn.style.display = 'block';
+    });
+
+    stopRecordBtn.addEventListener('click', () => {
+        stopRecordBtn.style.display = 'none';
+        loadingStatus.style.display = 'block';
+        mediaRecorder.stop();
+    });
+
+    function uploadVideo(blob, filename) {
+        let formData = new FormData();
+        formData.append('video', blob, filename);
+        
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+        
+        fetch("{% url 'upload_video' %}", {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-CSRFToken': csrfToken
+            }
+        })
+        .then(response => response.text())
+        .then(html => {
+            document.open();
+            document.write(html);
+            document.close();
+            window.history.pushState(null, '', "{% url 'upload_video' %}");
+        })
+        .catch(error => {
+            console.error('Error uploading video:', error);
+            alert('Error processing video. Please try again.');
+            loadingStatus.style.display = 'none';
+            startCameraBtn.style.display = 'block';
+        });
+    }
+</script>
 
 {% endblock %}
